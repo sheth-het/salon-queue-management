@@ -15,7 +15,7 @@
     "home": "Home",
     "customerJoin": "Join Queue",
     "customerStatus": "My Status",
-    "receptionist": "Receptionist",
+    "receptionist": "Reception Dashboard",
     "walkIn": "Walk-In Entry",
     "barber": "Barber Station",
     "tv": "TV Display",
@@ -102,6 +102,41 @@
     "simulateStartComing": "Position 2 (Start Coming)",
     "simulateTurn": "Called (It's Your Turn)",
     "simulateInService": "In Chair (In Service)"
+  },
+  "reception": {
+    "screenTitle": "Screen 4 • Reception Dashboard",
+    "heading": "Reception Command Center",
+    "subheading": "Manage chair assignments, walk-in entries, and live queue flow.",
+    "barbersHeading": "Chairs & Stylist Stations",
+    "queueHeading": "Live Waiting Queue (First-Come, First-Served)",
+    "addWalkIn": "+ Add Walk-In Customer",
+    "callNextEligible": "Call Next Eligible",
+    "busyServing": "Busy (Currently Serving)",
+    "vacant": "Available / Chair Vacant",
+    "nowServing": "Serving",
+    "nowCalling": "Calling",
+    "highWaitAlert": "High Wait (>60 mins)",
+    "actions": {
+      "call": "Call Customer",
+      "start": "Start Service",
+      "complete": "Complete Service",
+      "noShow": "Mark No-Show",
+      "cancel": "Cancel Spot"
+    },
+    "filterAll": "All",
+    "filterWaiting": "Waiting",
+    "filterServing": "Serving / Called",
+    "filterFinished": "Finished / Done",
+    "walkInModal": {
+      "title": "Register Walk-In Customer",
+      "desc": "Generate an immediate queue token for in-person front desk arrivals.",
+      "name": "Customer Name",
+      "phone": "Phone Number (Optional)",
+      "services": "Select Services (Max 3)",
+      "barber": "Stylist Preference",
+      "submit": "Issue Walk-In Token",
+      "cancel": "Cancel"
+    }
   },
   "actions": {
     "joinQueue": "Join Queue",

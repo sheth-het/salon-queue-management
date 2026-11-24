@@ -3,13 +3,13 @@
  * Defined based on docs/02-screens.md and docs/03-flows-rules.md
  */
 
-// Key for persisting the sequential token counter
+// Keys for persisting the sequential token counters
 const TOKEN_COUNTER_KEY = 'salon_token_counter';
-const QUEUE_STORAGE_KEY = 'salon_active_queue';
+const WALKIN_COUNTER_KEY = 'salon_walkin_counter';
 
 /**
  * 1. Token Number Generator
- * Generates unique tokens in the format: S-1, S-2, S-3...
+ * Generates unique customer online tokens: S-1, S-2, S-3...
  */
 export function generateNextTokenNumber() {
   let counter = 1;
@@ -32,14 +32,87 @@ export function generateNextTokenNumber() {
 }
 
 /**
- * 2. Dynamic Wait-Time Calculation Formula
+ * 1b. Walk-In Token Number Generator
+ * Generates unique receptionist walk-in tokens: W-1, W-2, W-3...
+ */
+export function generateWalkInTokenNumber() {
+  let counter = 1;
+  try {
+    const saved = localStorage.getItem(WALKIN_COUNTER_KEY);
+    if (saved) {
+      counter = parseInt(saved, 10) + 1;
+    }
+  } catch (e) {
+    console.warn('LocalStorage unavailable, defaulting walk-in counter');
+  }
+
+  try {
+    localStorage.setItem(WALKIN_COUNTER_KEY, counter.toString());
+  } catch (e) {
+    console.warn('Could not save walk-in counter');
+  }
+
+  return `W-${counter}`;
+}
+
+/**
+ * 2. Barber Concurrency Check
+ * Requirement: "Prevent a barber from receiving two customers simultaneously."
+ * Returns true if the barber currently has an active customer ('called' or 'in_service').
+ */
+export function isBarberBusy(barberId, queue = []) {
+  if (!barberId) return false;
+  return queue.some(
+    token => token.barberId === barberId && (token.status === 'called' || token.status === 'in_service')
+  );
+}
+
+/**
+ * 2b. Get Current Active Customer for a Barber
+ */
+export function getActiveCustomerForBarber(barberId, queue = []) {
+  if (!barberId) return null;
+  return queue.find(
+    token => token.barberId === barberId && (token.status === 'called' || token.status === 'in_service')
+  ) || null;
+}
+
+/**
+ * 3. Barber-Preference Assignment Rules (Strict FCFS with Preference Filtering)
+ * Requirement:
+ * - Look at waiting customers in first-come, first-served (FCFS) order.
+ * - Customer is eligible for barberId IF AND ONLY IF:
+ *     a) status === 'waiting'
+ *     AND
+ *     b) (customer.barberId === barberId OR customer.barberId === 'any' OR customer.barberId === null)
+ * - If customer specifically requested another barber, they are skipped.
+ */
+export function getNextEligibleCustomer(barberId, queue = []) {
+  if (!barberId) return null;
+
+  // Barber cannot call if already busy with a customer
+  if (isBarberBusy(barberId, queue)) {
+    return null;
+  }
+
+  // Find the first waiting customer matching the barber-preference rules
+  return queue.find(token => {
+    if (token.status !== 'waiting') return false;
+
+    // Customer explicitly chose this barber
+    if (token.barberId === barberId) return true;
+
+    // Customer chose "Any Available Barber"
+    if (!token.barberId || token.barberId === 'any') return true;
+
+    // Customer specifically requested a different barber -> NOT eligible
+    return false;
+  }) || null;
+}
+
+/**
+ * 4. Dynamic Wait-Time Calculation Formula
  * Based on docs/03-flows-rules.md
- * 
- * Scenario A (Specific Barber):
- * Wait Time = Remaining Time of Current Service + Sum(Duration of Preceding Waiting Customers) + (Buffer * N)
- * 
- * Scenario B (Any Available Barber):
- * Wait Time = (Sum(Remaining Time of All Active Barbers) + Sum(Duration of All Preceding Customers)) / ActiveBarbersCount + Buffer
  */
 export function calculateDynamicWaitTime({
   barberId = null,
@@ -74,8 +147,7 @@ export function calculateDynamicWaitTime({
 }
 
 /**
- * 3. Queue Position Determination
- * Calculates 1-based position and people ahead count.
+ * 5. Queue Position Determination
  */
 export function getQueuePosition(tokenId, queue = []) {
   const waitingQueue = queue.filter(
@@ -92,7 +164,7 @@ export function getQueuePosition(tokenId, queue = []) {
     };
   }
 
-  const position = index + 1; // 1-based (1 = next in line, 2 = second in line)
+  const position = index + 1;
   const peopleAhead = Math.max(0, index);
 
   return {
@@ -103,13 +175,7 @@ export function getQueuePosition(tokenId, queue = []) {
 }
 
 /**
- * 4. Customer State Evaluator
- * Enforces strict state rules:
- * - "It's your turn": when status === 'called' (or called by receptionist)
- * - "Start coming": when position === 2 (second in line)
- * - "Waiting": when position > 2
- * - "In Service": when status === 'in_service'
- * - "Cancelled": when cancelled
+ * 6. Customer State Evaluator
  */
 export function evaluateCustomerState({ token, queuePosition = 1 }) {
   if (!token) {
@@ -124,7 +190,6 @@ export function evaluateCustomerState({ token, queuePosition = 1 }) {
     };
   }
 
-  // 1. Receptionist has called the customer
   if (token.status === 'called') {
     return {
       code: 'its_your_turn',
@@ -140,7 +205,6 @@ export function evaluateCustomerState({ token, queuePosition = 1 }) {
     };
   }
 
-  // 2. Customer is currently sitting in chair
   if (token.status === 'in_service') {
     return {
       code: 'in_service',
@@ -155,7 +219,6 @@ export function evaluateCustomerState({ token, queuePosition = 1 }) {
     };
   }
 
-  // 3. Customer has cancelled
   if (token.status === 'cancelled') {
     return {
       code: 'cancelled',
@@ -170,8 +233,20 @@ export function evaluateCustomerState({ token, queuePosition = 1 }) {
     };
   }
 
-  // 4. Waiting in queue: check position
-  // SPEC REQUIREMENT: "Add the Start coming state when the customer is second in line."
+  if (token.status === 'no_show') {
+    return {
+      code: 'no_show',
+      titleEn: 'Marked No-Show',
+      titleGu: 'ગેરહાજર નોંધાયેલ',
+      descEn: 'Your token was marked no-show.',
+      descGu: 'તમારો ટોકન ગેરહાજર નોંધવામાં આવ્યો છે.',
+      badgeEn: 'NO SHOW',
+      badgeGu: 'ગેરહાજર',
+      theme: 'rose',
+      isAlert: false
+    };
+  }
+
   if (queuePosition === 2) {
     return {
       code: 'start_coming',
@@ -186,7 +261,6 @@ export function evaluateCustomerState({ token, queuePosition = 1 }) {
     };
   }
 
-  // 5. Position 1 (Waiting next to be called)
   if (queuePosition === 1) {
     return {
       code: 'next_in_line',
@@ -201,7 +275,6 @@ export function evaluateCustomerState({ token, queuePosition = 1 }) {
     };
   }
 
-  // 6. Position > 2 (Standard Waiting)
   return {
     code: 'waiting',
     titleEn: 'Waiting in Line',
@@ -216,8 +289,7 @@ export function evaluateCustomerState({ token, queuePosition = 1 }) {
 }
 
 /**
- * 5. Native Web Audio API Chime Generator
- * Synthesizes a crisp luxury 2-tone chime for "It's your turn"
+ * 7. Native Web Audio API Chime Generator
  */
 export function playChime() {
   try {
@@ -225,7 +297,6 @@ export function playChime() {
     if (!AudioContextClass) return;
     const ctx = new AudioContextClass();
     
-    // First tone (E5: ~659 Hz)
     const osc1 = ctx.createOscillator();
     const gain1 = ctx.createGain();
     osc1.type = 'sine';
@@ -237,7 +308,6 @@ export function playChime() {
     osc1.start(ctx.currentTime);
     osc1.stop(ctx.currentTime + 0.45);
 
-    // Second tone (A5: ~880 Hz) - higher chime
     const osc2 = ctx.createOscillator();
     const gain2 = ctx.createGain();
     osc2.type = 'sine';

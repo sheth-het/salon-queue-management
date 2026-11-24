@@ -8,7 +8,7 @@ export const dummySalonSettings = {
   maxCapacity: 25,
   bufferMinutes: 5,
   avgWaitMinutes: 20,
-  currentlyWaiting: 3,
+  currentlyWaiting: 4,
   activeBarbersCount: 3,
 };
 
@@ -112,7 +112,7 @@ export const dummyServices = [
   }
 ];
 
-// Initial Dummy Queue with S-1, S-2, S-3 format
+// Initial realistic queue designed to test FCFS, barber preferences, and >60m high-wait rule
 export const dummyQueueTokens = [
   {
     id: 'tok-1',
@@ -122,21 +122,20 @@ export const dummyQueueTokens = [
     barberId: 'barber-ravi',
     barberName: 'Ravi',
     chair: 1,
-    status: 'called',
+    status: 'in_service', // Ravi is busy with Aarav
     source: 'online',
     services: ['Signature Haircut'],
     totalDuration: 30,
     totalPrice: 200,
-    joinedAt: '11:15 AM',
-    position: 1,
-    estimatedWaitMinutes: 0,
+    joinedAt: '10:45 AM',
+    elapsedMinutes: 45,
   },
   {
     id: 'tok-2',
     tokenNumber: 'S-2',
     customerName: 'Jignesh Shah',
     phone: '9825123456',
-    barberId: 'barber-amit',
+    barberId: 'barber-amit', // Chose Amit specifically
     barberName: 'Amit',
     chair: 2,
     status: 'waiting',
@@ -144,25 +143,55 @@ export const dummyQueueTokens = [
     services: ['Signature Haircut', 'Beard Trim & Shape'],
     totalDuration: 50,
     totalPrice: 350,
-    joinedAt: '11:30 AM',
-    position: 2,
-    estimatedWaitMinutes: 12,
+    joinedAt: '10:15 AM',
+    elapsedMinutes: 72, // > 60 mins -> MUST BE HIGHLIGHTED!
   },
   {
     id: 'tok-3',
     tokenNumber: 'S-3',
     customerName: 'Ketan Trivedi',
     phone: '9909099090',
-    barberId: 'barber-imran',
-    barberName: 'Imran',
-    chair: 3,
+    barberId: 'barber-ravi', // Chose Ravi specifically
+    barberName: 'Ravi',
+    chair: 1,
     status: 'waiting',
     source: 'online',
     services: ['Beard Trim & Shape'],
     totalDuration: 20,
     totalPrice: 150,
-    joinedAt: '11:45 AM',
-    position: 3,
-    estimatedWaitMinutes: 25,
+    joinedAt: '10:40 AM',
+    elapsedMinutes: 50,
+  },
+  {
+    id: 'tok-4',
+    tokenNumber: 'W-1',
+    customerName: 'Sanjay Rawal',
+    phone: '9898011223',
+    barberId: 'any', // Chose Any Available Stylist
+    barberName: 'Any Stylist',
+    chair: null,
+    status: 'waiting',
+    source: 'walk_in',
+    services: ['Refreshing Hair Wash & Style'],
+    totalDuration: 15,
+    totalPrice: 120,
+    joinedAt: '10:55 AM',
+    elapsedMinutes: 35,
+  },
+  {
+    id: 'tok-5',
+    tokenNumber: 'S-4',
+    customerName: 'Farhan Shaikh',
+    phone: '9727112233',
+    barberId: 'barber-imran', // Chose Imran specifically
+    barberName: 'Imran',
+    chair: 3,
+    status: 'waiting',
+    source: 'online',
+    services: ['Hair Color / Highlights'],
+    totalDuration: 45,
+    totalPrice: 500,
+    joinedAt: '11:10 AM',
+    elapsedMinutes: 20,
   }
 ];
