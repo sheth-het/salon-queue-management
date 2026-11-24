@@ -47,8 +47,9 @@ export default function TVDisplayPage() {
     }
   }, [lastCalledToken, soundEnabled]);
 
-  // Next 5 tokens
-  const upcomingFive = getUpcomingTokens(5);
+  // Upcoming tokens (shows up to 8 with scroll support for larger queues)
+  const totalWaiting = queue.filter(t => t.status === 'waiting').length;
+  const upcomingTokens = getUpcomingTokens(8);
 
   const toggleFullScreen = () => {
     if (!document.fullscreenElement) {
@@ -269,73 +270,89 @@ export default function TVDisplayPage() {
         </div>
 
         {/* ============================================================ */}
-        {/* RIGHT 35% PANEL: UP NEXT QUEUE (NEXT FIVE TOKENS & WAIT)    */}
+        {/* RIGHT 35% PANEL: UP NEXT QUEUE (WAITING TOKENS & WAIT)       */}
         {/* ============================================================ */}
-        <div className="lg:col-span-4 bg-charcoal-800 rounded-3xl p-6 border border-charcoal-700 shadow-2xl flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-4 pb-3 border-b border-charcoal-700">
+        <div className="lg:col-span-4 bg-charcoal-800 rounded-3xl p-6 border border-charcoal-700 shadow-2xl flex flex-col justify-between overflow-hidden">
+          <div className="flex flex-col min-h-0 flex-1">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-charcoal-700 shrink-0">
               <div>
                 <h3 className="text-lg font-black text-white uppercase tracking-wider flex items-center gap-2">
                   <Clock className="w-4 h-4 text-gold-400" />
                   <span>Up Next / પછીનો વારો</span>
                 </h3>
-                <span className="text-[11px] text-gray-400">Next 5 tokens in waiting list</span>
+                <span className="text-[11px] text-gray-400">
+                  {totalWaiting} {totalWaiting === 1 ? 'customer' : 'customers'} in waiting list
+                </span>
               </div>
-              <span className="text-xs font-bold text-gold-400 uppercase tracking-wide">
-                Est. Wait
-              </span>
+              <div className="text-right">
+                <span className="text-xs font-bold text-gold-400 uppercase tracking-wide block">
+                  Est. Wait
+                </span>
+                <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1 justify-end">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>Live Sync</span>
+                </span>
+              </div>
             </div>
 
-            {/* Upcoming Five Tokens List */}
-            <div className="space-y-3">
-              {upcomingFive.length === 0 ? (
+            {/* Upcoming Tokens List */}
+            <div className="space-y-3 overflow-y-auto max-h-[calc(100vh-230px)] pr-1 flex-1">
+              {upcomingTokens.length === 0 ? (
                 <div className="py-20 text-center text-gray-400">
                   <CheckCircle2 className="w-10 h-10 mx-auto text-emerald-400 mb-2" />
                   <div className="text-base font-bold text-gray-200">Queue is Clear</div>
                   <div className="text-xs text-gray-500 mt-0.5">No waiting customers right now.</div>
                 </div>
               ) : (
-                upcomingFive.map((token, index) => (
-                  <div
-                    key={token.id}
-                    id={`tv-upnext-item-${index + 1}`}
-                    className={`p-4 rounded-2xl border transition-all flex items-center justify-between ${
-                      index === 0
-                        ? 'bg-gradient-to-r from-gold-500/20 via-gold-500/10 to-charcoal-900 border-gold-500/70 shadow-lg'
-                        : 'bg-charcoal-900/90 border-charcoal-700'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3.5">
-                      <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm border ${
+                <>
+                  {upcomingTokens.map((token, index) => (
+                    <div
+                      key={token.id}
+                      id={`tv-upnext-item-${index + 1}`}
+                      className={`p-3.5 sm:p-4 rounded-2xl border transition-all flex items-center justify-between ${
                         index === 0
-                          ? 'bg-gold-500 text-charcoal-900 border-gold-500 shadow'
-                          : 'bg-charcoal-800 text-gold-400 border-charcoal-700'
-                      }`}>
-                        {index + 1}
-                      </span>
-                      <div>
-                        <div className="text-xl font-black text-white tracking-tight">
-                          #{token.tokenNumber}
-                        </div>
-                        <div className="text-xs font-bold text-gray-300">
-                          {token.customerName}
-                        </div>
-                        <div className="text-[10px] text-gold-400/80 font-medium">
-                          {token.barberName ? `Pref: ${token.barberName}` : 'Any Stylist'}
+                          ? 'bg-gradient-to-r from-gold-500/20 via-gold-500/10 to-charcoal-900 border-gold-500/70 shadow-lg'
+                          : 'bg-charcoal-900/90 border-charcoal-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3.5">
+                        <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm border shrink-0 ${
+                          index === 0
+                            ? 'bg-gold-500 text-charcoal-900 border-gold-500 shadow'
+                            : 'bg-charcoal-800 text-gold-400 border-charcoal-700'
+                        }`}>
+                          {index + 1}
+                        </span>
+                        <div>
+                          <div className="text-xl font-black text-white tracking-tight">
+                            #{token.tokenNumber}
+                          </div>
+                          <div className="text-xs font-bold text-gray-300">
+                            {token.customerName}
+                          </div>
+                          <div className="text-[10px] text-gold-400/80 font-medium">
+                            {token.barberName ? `Pref: ${token.barberName}` : 'Any Stylist'}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="text-right">
-                      <div className="text-lg font-black text-gold-400 font-mono">
-                        ~{token.calculatedWaitMinutes || 15}m
+                      <div className="text-right shrink-0">
+                        <div className="text-lg font-black text-gold-400 font-mono">
+                          ~{token.calculatedWaitMinutes || 15}m
+                        </div>
+                        <span className="text-[10px] text-gray-500 font-semibold uppercase">
+                          {index === 0 ? 'Next Up' : 'Waiting'}
+                        </span>
                       </div>
-                      <span className="text-[10px] text-gray-500 font-semibold uppercase">
-                        {index === 0 ? 'Next Up' : 'Waiting'}
-                      </span>
                     </div>
-                  </div>
-                ))
+                  ))}
+
+                  {totalWaiting > upcomingTokens.length && (
+                    <div className="p-2.5 rounded-xl bg-charcoal-900/80 border border-charcoal-700 text-center text-xs text-gold-400/90 font-bold">
+                      +{totalWaiting - upcomingTokens.length} more waiting in queue
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

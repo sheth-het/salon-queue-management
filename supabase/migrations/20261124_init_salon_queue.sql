@@ -187,6 +187,11 @@ CREATE POLICY "Allow update queue tokens"
     USING (true)
     WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow delete queue tokens" ON public.queue_tokens;
+CREATE POLICY "Allow delete queue tokens" 
+    ON public.queue_tokens FOR DELETE 
+    USING (true);
+
 -- =============================================================================
 -- SUPABASE REALTIME PUBLICATION
 -- Enables live WebSocket change broadcasts across browsers

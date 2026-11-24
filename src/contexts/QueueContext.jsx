@@ -42,12 +42,13 @@ function mapDbTokenToUi(dbRow) {
     totalPrice: dbRow.total_price || 200,
     barberId: dbRow.barber_id,
     barberName: dbRow.barber_name || 'Any Available Stylist',
-    chair: dbRow.chair_number || 1,
+    chair: dbRow.chair_number || null,
     status: dbRow.status || 'waiting',
     source: dbRow.source || 'online',
     position: dbRow.position || 1,
     estimatedWaitMinutes: dbRow.estimated_wait_minutes || 15,
     joinedAt: dbRow.joined_at ? new Date(dbRow.joined_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+    joinedAtRaw: dbRow.joined_at || dbRow.created_at || new Date().toISOString(),
     calledAt: dbRow.called_at ? new Date(dbRow.called_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
     startedAt: dbRow.started_at ? new Date(dbRow.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
     completedAt: dbRow.completed_at ? new Date(dbRow.completed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
@@ -215,7 +216,12 @@ export function QueueProvider({ children }) {
           const newUiToken = mapDbTokenToUi(payload.new);
           setQueue(prev => {
             if (prev.some(t => t.id === newUiToken.id)) return prev;
-            return [...prev, newUiToken];
+            const nextList = [...prev, newUiToken];
+            return nextList.sort((a, b) => {
+              const timeA = new Date(a.joinedAtRaw || a.joinedAt || 0).getTime();
+              const timeB = new Date(b.joinedAtRaw || b.joinedAt || 0).getTime();
+              return timeA - timeB;
+            });
           });
         } else if (payload.eventType === 'UPDATE') {
           const updatedUiToken = mapDbTokenToUi(payload.new);
@@ -263,8 +269,16 @@ export function QueueProvider({ children }) {
         }
       });
 
+    // 3. Resilience Polling: Background 5-second sync to ensure TV Kiosks never go stale
+    const syncInterval = setInterval(() => {
+      if (isMounted) {
+        fetchInitialData();
+      }
+    }, 5000);
+
     return () => {
       isMounted = false;
+      clearInterval(syncInterval);
       supabase.removeChannel(channel);
     };
   }, []);
@@ -886,14 +900,21 @@ export function QueueProvider({ children }) {
   // =========================================================================
 
   const getActiveCustomerForBarber = useCallback((barberId) => {
-    return getActiveCustomerHelper(barberId, queue);
-  }, [queue]);
+    const barber = barbers.find(b => b.id === barberId || b.chair === barberId);
+    return queue.find(token => {
+      if (token.status !== 'called' && token.status !== 'in_service') return false;
+      if (token.barberId && token.barberId === barberId) return true;
+      if (barber && token.barberId && token.barberId === barber.id) return true;
+      if (barber && token.chair && barber.chair && token.chair === barber.chair) return true;
+      return false;
+    }) || null;
+  }, [queue, barbers]);
 
   const getNextCustomerForBarber = useCallback((barberId) => {
     return getNextEligibleCustomer(barberId, queue);
   }, [queue]);
 
-  const getUpcomingTokens = useCallback((limit = 5) => {
+  const getUpcomingTokens = useCallback((limit = 10) => {
     const waitingTokens = queue.filter(item => item.status === 'waiting');
     return waitingTokens.slice(0, limit).map((token, index) => {
       const preceding = waitingTokens.slice(0, index);
@@ -905,7 +926,8 @@ export function QueueProvider({ children }) {
       });
       return {
         ...token,
-        calculatedWaitMinutes: estWait
+        calculatedWaitMinutes: estWait,
+        queueRank: index + 1
       };
     });
   }, [queue, barbers, salonSettings.bufferMinutes]);
