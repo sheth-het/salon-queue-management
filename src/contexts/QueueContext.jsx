@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { dummyQueueTokens, dummyBarbers, dummySalonSettings } from '../data/dummyData';
+import { dummyQueueTokens, dummyBarbers, dummyServices, dummySalonSettings } from '../data/dummyData';
 import { 
   getNextEligibleCustomer, 
   isBarberBusy, 
@@ -14,9 +14,11 @@ const QueueContext = createContext();
 
 const STORAGE_QUEUE_KEY = 'salon_shared_queue_v2';
 const STORAGE_BARBERS_KEY = 'salon_shared_barbers_v2';
+const STORAGE_SERVICES_KEY = 'salon_shared_services_v2';
+const STORAGE_QUEUE_OPEN_KEY = 'salon_shared_queue_open_v2';
 
 export function QueueProvider({ children }) {
-  // Shared queue tokens state
+  // 1. Shared queue tokens state
   const [queue, setQueue] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_QUEUE_KEY);
@@ -27,7 +29,7 @@ export function QueueProvider({ children }) {
     return dummyQueueTokens;
   });
 
-  // Shared barbers state (Ravi, Amit, Imran)
+  // 2. Shared barbers state (Ravi, Amit, Imran)
   const [barbers, setBarbers] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_BARBERS_KEY);
@@ -36,6 +38,28 @@ export function QueueProvider({ children }) {
       console.warn('Could not read saved barbers, using defaults', e);
     }
     return dummyBarbers;
+  });
+
+  // 3. Shared services state (with isActive flag for turning on/off)
+  const [services, setServices] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_SERVICES_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Could not read saved services, using defaults', e);
+    }
+    return dummyServices.map(s => ({ ...s, isActive: true }));
+  });
+
+  // 4. Online Queue Open / Closed master control
+  const [isQueueOpen, setIsQueueOpen] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_QUEUE_OPEN_KEY);
+      if (saved !== null) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Could not read queue open state', e);
+    }
+    return true;
   });
 
   // Salon settings
@@ -48,54 +72,53 @@ export function QueueProvider({ children }) {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_QUEUE_KEY, JSON.stringify(queue));
-    } catch (e) {
-      console.warn('Could not persist queue', e);
-    }
+    } catch (e) {}
   }, [queue]);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_BARBERS_KEY, JSON.stringify(barbers));
-    } catch (e) {
-      console.warn('Could not persist barbers', e);
-    }
+    } catch (e) {}
   }, [barbers]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_SERVICES_KEY, JSON.stringify(services));
+    } catch (e) {}
+  }, [services]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_QUEUE_OPEN_KEY, JSON.stringify(isQueueOpen));
+    } catch (e) {}
+  }, [isQueueOpen]);
 
   // Sync across different browser tabs/windows automatically
   useEffect(() => {
     const handleStorageChange = (e) => {
-      if (e.key === STORAGE_QUEUE_KEY && e.newValue) {
-        try {
-          setQueue(JSON.parse(e.newValue));
-        } catch (err) {}
-      }
-      if (e.key === STORAGE_BARBERS_KEY && e.newValue) {
-        try {
-          setBarbers(JSON.parse(e.newValue));
-        } catch (err) {}
-      }
+      try {
+        if (e.key === STORAGE_QUEUE_KEY && e.newValue) setQueue(JSON.parse(e.newValue));
+        if (e.key === STORAGE_BARBERS_KEY && e.newValue) setBarbers(JSON.parse(e.newValue));
+        if (e.key === STORAGE_SERVICES_KEY && e.newValue) setServices(JSON.parse(e.newValue));
+        if (e.key === STORAGE_QUEUE_OPEN_KEY && e.newValue !== null) setIsQueueOpen(JSON.parse(e.newValue));
+      } catch (err) {}
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // =========================================================================
-  // QUEUE ACTIONS
+  // QUEUE & BARBER ACTIONS
   // =========================================================================
 
-  /**
-   * Call next eligible customer for a specific barber
-   */
   const callNextCustomer = (barberId) => {
     const barber = barbers.find(b => b.id === barberId);
     if (!barber) return { success: false, reason: 'Barber not found' };
 
-    // Concurrency guard: barber cannot take two customers simultaneously
     if (isBarberBusy(barberId, queue)) {
       return { success: false, reason: `${barber.name} is currently busy with a customer` };
     }
 
-    // Barber-preference & FCFS rule
     const eligibleCustomer = getNextEligibleCustomer(barberId, queue);
     if (!eligibleCustomer) {
       return { 
@@ -130,9 +153,6 @@ export function QueueProvider({ children }) {
     };
   };
 
-  /**
-   * START SERVICE: Customer sits in chair -> status changes from 'called' to 'in_service'
-   */
   const startService = (tokenId) => {
     setQueue(prevQueue =>
       prevQueue.map(item =>
@@ -141,9 +161,6 @@ export function QueueProvider({ children }) {
     );
   };
 
-  /**
-   * DONE / COMPLETE SERVICE: Service finishes -> status changes to 'completed' and frees chair
-   */
   const completeService = (tokenId) => {
     setQueue(prevQueue =>
       prevQueue.map(item =>
@@ -152,36 +169,36 @@ export function QueueProvider({ children }) {
     );
   };
 
-  /**
-   * BARBER STATUS TOGGLE: Available ('active') vs On Break ('break') vs Off Duty ('off_duty')
-   */
   const setBarberStatus = (barberId, status) => {
     setBarbers(prevBarbers =>
       prevBarbers.map(b => (b.id === barberId ? { ...b, status } : b))
     );
   };
 
-  /**
-   * MARK NO-SHOW: Customer did not report
-   */
+  const toggleBarberDuty = (barberId) => {
+    setBarbers(prevBarbers =>
+      prevBarbers.map(b => {
+        if (b.id === barberId) {
+          const newStatus = b.status === 'off_duty' ? 'active' : 'off_duty';
+          return { ...b, status: newStatus };
+        }
+        return b;
+      })
+    );
+  };
+
   const markNoShow = (tokenId) => {
     setQueue(prevQueue =>
       prevQueue.map(item => (item.id === tokenId ? { ...item, status: 'no_show' } : item))
     );
   };
 
-  /**
-   * CANCEL SPOT
-   */
   const cancelToken = (tokenId) => {
     setQueue(prevQueue =>
       prevQueue.map(item => (item.id === tokenId ? { ...item, status: 'cancelled' } : item))
     );
   };
 
-  /**
-   * ADD WALK-IN CUSTOMER
-   */
   const addWalkIn = ({ customerName, phone, services, barberId }) => {
     const tokenNumber = generateWalkInTokenNumber();
     const chosenBarberObj = barbers.find(b => b.id === barberId);
@@ -207,18 +224,74 @@ export function QueueProvider({ children }) {
     return newWalkIn;
   };
 
+  // =========================================================================
+  // OWNER SETTINGS ACTIONS: SERVICES MANAGEMENT & QUEUE OPEN/CLOSE
+  // =========================================================================
+
   /**
-   * RESET STATE TO DEFAULTS (For test resets)
+   * Turn a service on or off (Active / Inactive)
+   * Rule: When turned off, it is hidden from the Join Queue screen.
    */
+  const toggleServiceActive = (serviceId) => {
+    setServices(prevServices =>
+      prevServices.map(s =>
+        s.id === serviceId ? { ...s, isActive: s.isActive === false ? true : false } : s
+      )
+    );
+  };
+
+  /**
+   * Update service details (price, duration, names)
+   */
+  const updateService = (serviceId, updatedFields) => {
+    setServices(prevServices =>
+      prevServices.map(s =>
+        s.id === serviceId ? { ...s, ...updatedFields } : s
+      )
+    );
+  };
+
+  /**
+   * Add a new service to the catalog
+   */
+  const addService = (newService) => {
+    const id = `srv-${Date.now()}`;
+    const serviceToAdd = {
+      id,
+      name_en: newService.name_en || 'New Service',
+      name_gu: newService.name_gu || newService.name_en || 'નવી સેવા',
+      duration: parseInt(newService.duration, 10) || 30,
+      price: parseInt(newService.price, 10) || 200,
+      category: newService.category || 'Hair',
+      description_en: newService.description_en || 'Salon service',
+      description_gu: newService.description_gu || 'સલૂન સેવા',
+      isActive: true,
+    };
+    setServices(prev => [...prev, serviceToAdd]);
+    return serviceToAdd;
+  };
+
+  /**
+   * Master Queue Open / Close toggle
+   * Rule: When closed, disables online joining while allowing walk-ins.
+   */
+  const toggleQueueOpen = () => {
+    setIsQueueOpen(prev => !prev);
+  };
+
   const resetToDefaults = () => {
     setQueue(dummyQueueTokens);
     setBarbers(dummyBarbers);
+    setServices(dummyServices.map(s => ({ ...s, isActive: true })));
+    setIsQueueOpen(true);
     localStorage.removeItem(STORAGE_QUEUE_KEY);
     localStorage.removeItem(STORAGE_BARBERS_KEY);
+    localStorage.removeItem(STORAGE_SERVICES_KEY);
+    localStorage.removeItem(STORAGE_QUEUE_OPEN_KEY);
   };
 
   // =========================================================================
-  // QUERY HELPERS FOR SCREENS
+  // QUERY HELPERS & ANALYTICS METRICS
   // =========================================================================
 
   const getActiveCustomerForBarber = (barberId) => {
@@ -229,10 +302,6 @@ export function QueueProvider({ children }) {
     return getNextEligibleCustomer(barberId, queue);
   };
 
-  /**
-   * UP NEXT TOKENS (For Waiting Area TV Display)
-   * Returns the next 5 tokens in waiting status with dynamically calculated wait times
-   */
   const getUpcomingTokens = (limit = 5) => {
     const waitingTokens = queue.filter(item => item.status === 'waiting');
     return waitingTokens.slice(0, limit).map((token, index) => {
@@ -250,24 +319,42 @@ export function QueueProvider({ children }) {
     });
   };
 
+  // Today's Metrics
+  const completedCount = queue.filter(t => t.status === 'completed').length;
+  const noShowCount = queue.filter(t => t.status === 'no_show').length;
+  // Base day analytics + live actions
+  const customersServedToday = 14 + completedCount;
+  const noShowsToday = 2 + noShowCount;
+  const avgWaitTimeToday = 22; // Average wait time in minutes
+
   return (
     <QueueContext.Provider
       value={{
         queue,
         barbers,
+        services,
+        isQueueOpen,
         salonSettings,
         lastCalledToken,
         callNextCustomer,
         startService,
         completeService,
         setBarberStatus,
+        toggleBarberDuty,
         markNoShow,
         cancelToken,
         addWalkIn,
+        toggleServiceActive,
+        updateService,
+        addService,
+        toggleQueueOpen,
         resetToDefaults,
         getActiveCustomerForBarber,
         getNextCustomerForBarber,
         getUpcomingTokens,
+        customersServedToday,
+        noShowsToday,
+        avgWaitTimeToday,
       }}
     >
       {children}

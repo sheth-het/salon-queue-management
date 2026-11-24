@@ -138,6 +138,74 @@
       "cancel": "Cancel"
     }
   },
+  "owner": {
+    "screenTitle": "Screen 7 • Owner Settings",
+    "heading": "Salon Owner Control Center",
+    "subheading": "Manage service catalog, pricing, barber duty status, and online queue access.",
+    "analytics": {
+      "servedTitle": "Customers Served Today",
+      "avgWaitTitle": "Average Wait Time",
+      "noShowsTitle": "Today's No-Shows",
+      "revenueTitle": "Est. Counter Revenue",
+      "liveQueue": "Currently in Queue"
+    },
+    "queueControl": {
+      "title": "Online Queue Master Switch",
+      "desc": "Control whether remote customers can join the queue online from their smartphones.",
+      "openStatus": "Online Queue is OPEN",
+      "closedStatus": "Online Queue is CLOSED",
+      "toggleOpen": "Open Online Queue",
+      "toggleClose": "Close Online Queue",
+      "walkInNote": "Walk-in customers at the reception desk remain allowed even when the online queue is closed."
+    },
+    "tabs": {
+      "services": "Services & Pricing Catalog",
+      "barbers": "Barber On-Duty Roster",
+      "controls": "Queue Rules & Reset",
+      "addService": "+ Add New Service"
+    },
+    "serviceTable": {
+      "title": "Configured Services",
+      "name": "Service Name",
+      "duration": "Duration",
+      "price": "Price (₹)",
+      "status": "Status",
+      "actions": "Actions",
+      "active": "Active (Visible)",
+      "inactive": "Disabled (Hidden)",
+      "edit": "Edit",
+      "toggleOn": "Enable",
+      "toggleOff": "Disable"
+    },
+    "serviceModal": {
+      "addTitle": "Add New Salon Service",
+      "editTitle": "Edit Service Details",
+      "nameEn": "English Name",
+      "nameGu": "Gujarati Name",
+      "duration": "Duration (minutes)",
+      "price": "Price (₹ INR)",
+      "category": "Category",
+      "save": "Save Service",
+      "cancel": "Cancel"
+    },
+    "barbers": {
+      "title": "Barber Team & Duty Management",
+      "chair": "Chair",
+      "status": "Duty Status",
+      "onDuty": "On Duty",
+      "offDuty": "Off Duty",
+      "onBreak": "On Break",
+      "toggleDuty": "Toggle Duty Status",
+      "activeCustomer": "Active Customer",
+      "none": "None"
+    },
+    "reset": {
+      "title": "Demo Data Reset",
+      "desc": "Restore all queue tokens, barbers, and service catalog to their default factory settings.",
+      "button": "Reset All Data to Defaults",
+      "confirm": "Are you sure you want to reset all salon data to initial defaults?"
+    }
+  },
   "actions": {
     "joinQueue": "Join Queue",
     "leaveQueue": "Leave Queue",

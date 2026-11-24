@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
-import { dummyServices, dummyBarbers, dummySalonSettings, dummyQueueTokens } from '../data/dummyData';
+import { useQueue } from '../contexts/QueueContext';
 import { generateNextTokenNumber, calculateDynamicWaitTime } from '../lib/queueRules';
 import { 
   Scissors, 
@@ -14,18 +14,24 @@ import {
   Phone, 
   CheckCircle2, 
   X,
-  Info
+  Info,
+  Lock,
+  DoorClosed
 } from 'lucide-react';
 
 export default function CustomerJoinPage() {
   const { t, language } = useLanguage();
   const navigate = useNavigate();
+  const { services, barbers, isQueueOpen, salonSettings, queue } = useQueue();
+
+  // Filter only active services (services turned OFF by owner are hidden!)
+  const visibleServices = services.filter((s) => s.isActive !== false);
 
   // Form State
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [selectedServices, setSelectedServices] = useState([]);
-  const [chosenBarber, setChosenBarber] = useState('any'); // 'any', 'barber-ravi', 'barber-amit', 'barber-imran'
+  const [chosenBarber, setChosenBarber] = useState('any');
 
   // Validation & Modal State
   const [errors, setErrors] = useState({});
@@ -35,6 +41,7 @@ export default function CustomerJoinPage() {
 
   // Toggle service selection with MAX 3 CONSTRAINT
   const toggleService = (serviceId) => {
+    if (!isQueueOpen) return;
     setErrors((prev) => ({ ...prev, services: '' }));
     setLimitNotice(false);
 
@@ -51,7 +58,7 @@ export default function CustomerJoinPage() {
   };
 
   // Compute selected items, total duration, and total price
-  const selectedServiceObjects = dummyServices.filter((s) =>
+  const selectedServiceObjects = visibleServices.filter((s) =>
     selectedServices.includes(s.id)
   );
 
@@ -66,32 +73,30 @@ export default function CustomerJoinPage() {
   );
 
   // Determine chosen barber object
-  const selectedBarberObject = dummyBarbers.find((b) => b.id === chosenBarber);
+  const selectedBarberObject = barbers.find((b) => b.id === chosenBarber);
 
   // Dynamic estimated wait time from queue rules
   const estimatedWait = calculateDynamicWaitTime({
     barberId: chosenBarber === 'any' ? null : chosenBarber,
-    precedingCustomers: dummyQueueTokens,
-    activeBarbersCount: 3,
-    bufferMinutes: dummySalonSettings.bufferMinutes || 5
+    precedingCustomers: queue,
+    activeBarbersCount: barbers.filter(b => b.status === 'active').length || 1,
+    bufferMinutes: salonSettings.bufferMinutes || 5
   });
 
   // Form validation function
   const validateForm = () => {
+    if (!isQueueOpen) return false;
     const newErrors = {};
 
-    // 1. Name validation (at least 2 non-whitespace characters)
     if (!customerName.trim() || customerName.trim().length < 2) {
       newErrors.name = t('join.validation.nameRequired');
     }
 
-    // 2. 10-digit phone number validation
     const cleanedPhone = customerPhone.replace(/\D/g, '');
     if (!/^[6-9]\d{9}$/.test(cleanedPhone) && !/^\d{10}$/.test(cleanedPhone)) {
       newErrors.phone = t('join.validation.phoneRequired');
     }
 
-    // 3. Services validation (1 to 3 services)
     if (selectedServices.length === 0) {
       newErrors.services = t('join.validation.serviceRequired');
     } else if (selectedServices.length > 3) {
@@ -102,7 +107,6 @@ export default function CustomerJoinPage() {
     return Object.keys(newErrors).length === 0;
   };
 
-  // Open Confirmation Modal
   const handleProceedToReview = (e) => {
     e.preventDefault();
     if (validateForm()) {
@@ -110,16 +114,15 @@ export default function CustomerJoinPage() {
     }
   };
 
-  // Final Confirmation: Generate Token (S-1, S-2, S-3...) & Save
   const handleFinalConfirm = () => {
+    if (!isQueueOpen) return;
     setIsSubmitting(true);
 
-    // SPEC REQUIREMENT: Generate unique token such as S-1, S-2, S-3
     const tokenNumber = generateNextTokenNumber();
 
     const newToken = {
       id: `tok-${Date.now()}`,
-      tokenNumber: tokenNumber, // e.g. S-1, S-2, S-3
+      tokenNumber: tokenNumber,
       customerName: customerName.trim(),
       phone: customerPhone.replace(/\D/g, ''),
       services: selectedServiceObjects.map((s) =>
@@ -133,12 +136,11 @@ export default function CustomerJoinPage() {
         : (language === 'gu' ? 'કોઈપણ ઉપલબ્ધ વાળંદ' : 'Any Available Stylist'),
       chair: selectedBarberObject ? selectedBarberObject.chair : 1,
       status: 'waiting',
-      position: 2, // Default to second in line for immediate demo of "Start coming" rule, or based on queue
+      position: 2,
       joinedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       estimatedWaitMinutes: estimatedWait,
     };
 
-    // Store in localStorage for persistence
     localStorage.setItem('salon_active_token', JSON.stringify(newToken));
 
     setTimeout(() => {
@@ -166,18 +168,53 @@ export default function CustomerJoinPage() {
             <Scissors className="w-3.5 h-3.5 transform -rotate-45" />
             <span>Screen 2 • Join Queue</span>
           </span>
-          <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-            {dummySalonSettings.isQueueOpen ? t('salon.open') : t('salon.closed')}
+          <span
+            id="join-queue-status-badge"
+            className={`text-xs font-bold px-2.5 py-0.5 rounded-full border ${
+              isQueueOpen
+                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+            }`}
+          >
+            {isQueueOpen ? t('salon.open') : t('salon.closed')}
           </span>
         </div>
         <h1 className="text-2xl font-black text-white">{t('join.title')}</h1>
         <p className="text-xs text-gray-400 mt-1">{t('join.subtitle')}</p>
       </div>
 
+      {/* =================================================================== */}
+      {/* CLOSED QUEUE BANNER (When owner has closed the online queue)         */}
+      {/* =================================================================== */}
+      {!isQueueOpen && (
+        <div 
+          id="online-queue-closed-alert"
+          className="mb-6 p-5 rounded-3xl bg-gradient-to-r from-rose-500/20 via-rose-500/10 to-charcoal-800 border-2 border-rose-500/60 shadow-xl text-center"
+        >
+          <div className="w-12 h-12 mx-auto rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center mb-2.5 border border-rose-500/40">
+            <DoorClosed className="w-6 h-6" />
+          </div>
+          <h2 className="text-base font-black text-white">
+            Online Queue is Currently Closed
+          </h2>
+          <p className="text-xs text-gray-300 mt-1 leading-relaxed">
+            Online queue registration is closed for today. However, <strong className="text-gold-400">walk-in customers are still welcome!</strong> Please visit our front desk reception to be added in person.
+          </p>
+          <div className="mt-4 flex justify-center gap-2">
+            <Link
+              to="/receptionist"
+              className="px-4 py-2 rounded-xl bg-gold-500 hover:bg-gold-400 text-charcoal-900 font-bold text-xs transition"
+            >
+              Go to Reception Desk
+            </Link>
+          </div>
+        </div>
+      )}
+
       {/* Main Join Queue Form */}
       <form onSubmit={handleProceedToReview} noValidate className="space-y-5">
         {/* Customer Information Card */}
-        <div className="bg-charcoal-800 rounded-3xl p-5 border border-charcoal-700 shadow-xl space-y-4">
+        <div className={`bg-charcoal-800 rounded-3xl p-5 border border-charcoal-700 shadow-xl space-y-4 ${!isQueueOpen ? 'opacity-60 pointer-events-none' : ''}`}>
           <h2 className="text-xs font-bold uppercase tracking-wider text-gold-400 flex items-center gap-1.5">
             <User className="w-4 h-4" />
             <span>1. Customer Details</span>
@@ -191,6 +228,7 @@ export default function CustomerJoinPage() {
             <input
               type="text"
               id="customer-name-input"
+              disabled={!isQueueOpen}
               value={customerName}
               onChange={(e) => {
                 setCustomerName(e.target.value);
@@ -223,6 +261,7 @@ export default function CustomerJoinPage() {
               <input
                 type="tel"
                 id="customer-phone-input"
+                disabled={!isQueueOpen}
                 maxLength={10}
                 value={customerPhone}
                 onChange={(e) => {
@@ -251,8 +290,10 @@ export default function CustomerJoinPage() {
           </div>
         </div>
 
-        {/* Services Selection Matrix (Max 3 Allowed) */}
-        <div className="bg-charcoal-800 rounded-3xl p-5 border border-charcoal-700 shadow-xl space-y-3">
+        {/* =================================================================== */}
+        {/* SERVICES SELECTION MATRIX (HIDES SERVICES TURNED OFF BY OWNER)      */}
+        {/* =================================================================== */}
+        <div className={`bg-charcoal-800 rounded-3xl p-5 border border-charcoal-700 shadow-xl space-y-3 ${!isQueueOpen ? 'opacity-60 pointer-events-none' : ''}`}>
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-bold uppercase tracking-wider text-gold-400 flex items-center gap-1.5">
               <Scissors className="w-4 h-4 transform -rotate-45" />
@@ -273,7 +314,6 @@ export default function CustomerJoinPage() {
             {t('join.servicesLimit')}
           </p>
 
-          {/* Max 3 Limit Warning Alert */}
           {limitNotice && (
             <div
               className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center gap-2 animate-bounce"
@@ -291,9 +331,9 @@ export default function CustomerJoinPage() {
             </p>
           )}
 
-          {/* Service Cards */}
-          <div className="space-y-2 pt-1">
-            {dummyServices.map((service) => {
+          {/* Service Cards (Only visibleServices that are turned ON) */}
+          <div className="space-y-2 pt-1" id="services-matrix-container">
+            {visibleServices.map((service) => {
               const isSelected = selectedServices.includes(service.id);
               const displayName = language === 'gu' ? service.name_gu : service.name_en;
               const displayDesc = language === 'gu' ? service.description_gu : service.description_en;
@@ -301,6 +341,7 @@ export default function CustomerJoinPage() {
               return (
                 <div
                   key={service.id}
+                  id={`service-card-${service.id}`}
                   onClick={() => toggleService(service.id)}
                   className={`p-3.5 rounded-2xl border cursor-pointer transition-all duration-200 select-none ${
                     isSelected
@@ -310,12 +351,6 @@ export default function CustomerJoinPage() {
                   role="checkbox"
                   aria-checked={isSelected}
                   tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === ' ' || e.key === 'Enter') {
-                      e.preventDefault();
-                      toggleService(service.id);
-                    }
-                  }}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
@@ -354,15 +389,14 @@ export default function CustomerJoinPage() {
           </div>
         </div>
 
-        {/* Barber Choice: Ravi, Amit, Imran, or Any Stylist */}
-        <div className="bg-charcoal-800 rounded-3xl p-5 border border-charcoal-700 shadow-xl space-y-3">
+        {/* Barber Choice: Only shows active on-duty barbers */}
+        <div className={`bg-charcoal-800 rounded-3xl p-5 border border-charcoal-700 shadow-xl space-y-3 ${!isQueueOpen ? 'opacity-60 pointer-events-none' : ''}`}>
           <h2 className="text-xs font-bold uppercase tracking-wider text-gold-400 flex items-center gap-1.5">
             <Sparkles className="w-4 h-4" />
             <span>3. {t('join.chooseBarber')}</span>
           </h2>
 
           <div className="grid grid-cols-1 gap-2 pt-1">
-            {/* Any Available Option (Recommended) */}
             <div
               onClick={() => setChosenBarber('any')}
               className={`p-3.5 rounded-2xl border cursor-pointer transition select-none flex items-center justify-between ${
@@ -395,8 +429,7 @@ export default function CustomerJoinPage() {
               </span>
             </div>
 
-            {/* The 3 Sample Barbers: Ravi, Amit, Imran */}
-            {dummyBarbers.map((barber) => {
+            {barbers.filter(b => b.status !== 'off_duty').map((barber) => {
               const isSelected = chosenBarber === barber.id;
               const displayName = language === 'gu' ? barber.nameGu : barber.name;
               const displaySpec = language === 'gu' ? barber.specialtyGu : barber.specialty;
@@ -440,8 +473,8 @@ export default function CustomerJoinPage() {
           </div>
         </div>
 
-        {/* Live Selection Summary Card (Duration & Price) */}
-        <div className="bg-charcoal-800 rounded-3xl p-5 border border-charcoal-700 shadow-xl space-y-2.5">
+        {/* Live Selection Summary Card */}
+        <div className={`bg-charcoal-800 rounded-3xl p-5 border border-charcoal-700 shadow-xl space-y-2.5 ${!isQueueOpen ? 'opacity-60 pointer-events-none' : ''}`}>
           <div className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1">
             {t('join.summaryTitle')}
           </div>
@@ -473,9 +506,21 @@ export default function CustomerJoinPage() {
         <button
           type="submit"
           id="proceed-review-btn"
-          className="w-full py-4 rounded-2xl bg-gradient-to-r from-gold-500 via-gold-400 to-gold-500 hover:from-gold-400 hover:to-gold-300 text-charcoal-900 font-black text-sm tracking-wide transition shadow-xl shadow-gold-500/20 active:scale-[0.99] flex items-center justify-center gap-2"
+          disabled={!isQueueOpen}
+          className={`w-full py-4 rounded-2xl font-black text-sm tracking-wide transition shadow-xl flex items-center justify-center gap-2 ${
+            isQueueOpen
+              ? 'bg-gradient-to-r from-gold-500 via-gold-400 to-gold-500 hover:from-gold-400 hover:to-gold-300 text-charcoal-900 shadow-gold-500/20 active:scale-[0.99]'
+              : 'bg-charcoal-700 text-gray-500 cursor-not-allowed border border-charcoal-600'
+          }`}
         >
-          <span>{t('join.btnJoin')}</span>
+          {isQueueOpen ? (
+            <span>{t('join.btnJoin')}</span>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <Lock className="w-4 h-4" />
+              <span>Online Queue Closed</span>
+            </span>
+          )}
         </button>
       </form>
 
@@ -486,7 +531,6 @@ export default function CustomerJoinPage() {
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
         >
           <div className="bg-charcoal-800 w-full max-w-sm rounded-3xl p-6 border-2 border-gold-500 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
-            {/* Close button */}
             <button
               onClick={() => setShowConfirmation(false)}
               className="absolute top-4 right-4 p-1.5 rounded-full bg-charcoal-700 text-gray-400 hover:text-white transition"
@@ -507,7 +551,6 @@ export default function CustomerJoinPage() {
               </p>
             </div>
 
-            {/* Confirmation Items */}
             <div className="bg-charcoal-900 rounded-2xl p-4 border border-charcoal-700/80 space-y-3 text-xs mb-5">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
@@ -553,7 +596,6 @@ export default function CustomerJoinPage() {
               </div>
             </div>
 
-            {/* Modal Buttons */}
             <div className="space-y-2">
               <button
                 type="button"

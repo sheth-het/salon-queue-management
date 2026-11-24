@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useQueue } from '../contexts/QueueContext';
 import { 
   Scissors, 
   Clock, 
@@ -18,6 +19,7 @@ import { dummySalonSettings, dummyBarbers, dummyServices, dummyQueueTokens } fro
 
 export default function HomePage() {
   const { t, language } = useLanguage();
+  const { isQueueOpen } = useQueue();
   const [existingToken, setExistingToken] = useState(null);
 
   useEffect(() => {
@@ -46,9 +48,13 @@ export default function HomePage() {
             </div>
 
             {/* Opening Status Badge */}
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>{dummySalonSettings.isQueueOpen ? t('salon.open') : t('salon.closed')}</span>
+            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border shadow-sm ${
+              isQueueOpen
+                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${isQueueOpen ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`}></span>
+              <span>{isQueueOpen ? t('salon.open') : t('salon.closed')}</span>
             </div>
           </div>
 
