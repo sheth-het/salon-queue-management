@@ -1,14 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// Check if valid production or local credentials exist (not default placeholder)
+// Check if valid production or local credentials exist (not placeholder)
 export const isSupabaseConfigured = Boolean(
   supabaseUrl && 
   supabaseAnonKey && 
   !supabaseUrl.includes('your-project-id') &&
-  !supabaseUrl.includes('demo-salon-queue') &&
   (supabaseUrl.startsWith('https://') || supabaseUrl.startsWith('http://localhost') || supabaseUrl.startsWith('http://127.0.0.1'))
 );
 

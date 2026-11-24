@@ -24,6 +24,7 @@ const schemaContent = fs.readFileSync(schemaPath, 'utf8');
 const requiredTables = ['salon_settings', 'services', 'barbers', 'customers', 'queue_tokens'];
 requiredTables.forEach(table => {
   assert.ok(
+    schemaContent.includes(`CREATE TABLE IF NOT EXISTS public.${table}`) ||
     schemaContent.includes(`CREATE TABLE IF NOT EXISTS ${table}`),
     `Schema must declare table: ${table}`
   );
@@ -51,15 +52,16 @@ requiredIndexes.forEach(idx => {
 console.log('✓ Performance B-Tree indexes verified (FCFS ordering, status filtering)');
 
 // Verify Realtime Publication
-assert.ok(schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE queue_tokens;'));
-assert.ok(schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE barbers;'));
-assert.ok(schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE services;'));
-assert.ok(schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE salon_settings;'));
+assert.ok(schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE public.queue_tokens') || schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE queue_tokens'));
+assert.ok(schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE public.barbers') || schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE barbers'));
+assert.ok(schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE public.services') || schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE services'));
+assert.ok(schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE public.salon_settings') || schemaContent.includes('ALTER PUBLICATION supabase_realtime ADD TABLE salon_settings'));
 console.log('✓ Supabase Realtime publication confirmed for all 4 dynamic tables');
 
 // Verify RLS & Policies
 requiredTables.forEach(table => {
   assert.ok(
+    schemaContent.includes(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`) ||
     schemaContent.includes(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;`),
     `RLS must be enabled on table ${table}`
   );

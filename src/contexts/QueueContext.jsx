@@ -19,6 +19,13 @@ const STORAGE_SERVICES_KEY = 'salon_shared_services_v2';
 const STORAGE_QUEUE_OPEN_KEY = 'salon_shared_queue_open_v2';
 
 // -----------------------------------------------------------------------------
+// HELPER: Validate standard UUID string format
+// -----------------------------------------------------------------------------
+const isValidUuid = (val) => {
+  return typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+};
+
+// -----------------------------------------------------------------------------
 // ADAPTER HELPERS: Map between Supabase snake_case & UI camelCase models
 // -----------------------------------------------------------------------------
 function mapDbTokenToUi(dbRow) {
@@ -310,34 +317,78 @@ export function QueueProvider({ children }) {
    * Inserts into Supabase queue_tokens and synchronizes cross-window state
    */
   const joinOnlineQueue = async (tokenData) => {
-    // 1. Optimistic local state update
-    setQueue(prev => [...prev, tokenData]);
-
-    // 2. Persist to Supabase if configured
+    // 1. If Supabase is configured, write directly to database
     if (isSupabaseConfigured && supabase) {
       try {
-        // Also insert/upsert customer
+        let customerId = null;
         if (tokenData.phone) {
-          await supabase.from('customers').insert({
-            name: tokenData.customerName,
-            phone: tokenData.phone,
-          });
+          try {
+            const { data: custData } = await supabase
+              .from('customers')
+              .insert({
+                name: tokenData.customerName,
+                phone: tokenData.phone,
+              })
+              .select('id')
+              .single();
+            if (custData) customerId = custData.id;
+          } catch (custErr) {
+            console.warn('Customer directory optional insert notice:', custErr);
+          }
         }
+
+        // Resolve barber UUID safely so invalid non-UUID strings never crash PostgreSQL
+        let resolvedBarberId = null;
+        if (tokenData.barberId && isValidUuid(tokenData.barberId)) {
+          resolvedBarberId = tokenData.barberId;
+        } else if (tokenData.barberId && tokenData.barberId !== 'any') {
+          const matchedBarber = barbers.find(
+            (b) =>
+              b.id === tokenData.barberId ||
+              b.name?.toLowerCase() === tokenData.barberName?.toLowerCase() ||
+              b.chair === tokenData.chair
+          );
+          if (matchedBarber && isValidUuid(matchedBarber.id)) {
+            resolvedBarberId = matchedBarber.id;
+          }
+        }
+
+        // Format services JSON snapshot cleanly for PostgreSQL jsonb column
+        const servicesPayload = Array.isArray(tokenData.services)
+          ? tokenData.services.map((s) => {
+              if (typeof s === 'string') return { name: s };
+              return {
+                id: s.id,
+                name: s.name_en || s.name || s.name_gu,
+                duration: s.duration || s.duration_minutes || 30,
+                price: s.price || 200,
+                category: s.category || 'Hair',
+              };
+            })
+          : [];
+
+        const validServiceIds = Array.isArray(tokenData.services)
+          ? tokenData.services
+              .map((s) => (typeof s === 'object' ? s.id : null))
+              .filter((id) => isValidUuid(id))
+          : [];
 
         const dbRow = {
           token_number: tokenData.tokenNumber,
+          customer_id: customerId,
           customer_name: tokenData.customerName,
           customer_phone: tokenData.phone || null,
-          barber_id: tokenData.barberId || null,
+          service_ids: validServiceIds,
+          services: servicesPayload,
+          barber_id: resolvedBarberId,
           barber_name: tokenData.barberName || 'Any Available Stylist',
           chair_number: tokenData.chair || 1,
           status: 'waiting',
           source: 'online',
           total_duration: tokenData.totalDuration || 30,
           total_price: tokenData.totalPrice || 200,
-          position: tokenData.position || 2,
+          position: tokenData.position || queue.filter((t) => t.status === 'waiting').length + 1,
           estimated_wait_minutes: tokenData.estimatedWaitMinutes || 15,
-          services: tokenData.services || [],
         };
 
         const { data, error } = await supabase
@@ -346,16 +397,44 @@ export function QueueProvider({ children }) {
           .select()
           .single();
 
-        if (!error && data) {
-          // Replace optimistic ID with database UUID
-          setQueue(prev => prev.map(t => t.id === tokenData.id ? { ...t, id: data.id } : t));
+        if (error) {
+          console.error('Supabase queue_tokens insert error:', error);
+          return {
+            success: false,
+            error: `${error.message || 'Database insert failed'} (Code: ${error.code || 'UNKNOWN'})`,
+          };
         }
+
+        // Map the database record to our frontend model
+        const createdUiToken = mapDbTokenToUi(data);
+        setQueue((prev) => {
+          if (prev.some((t) => t.id === createdUiToken.id)) return prev;
+          return [...prev, createdUiToken];
+        });
+
+        return {
+          success: true,
+          token: createdUiToken,
+        };
       } catch (err) {
-        console.warn('Could not insert token to Supabase:', err);
+        console.error('Unexpected error inserting into Supabase:', err);
+        return {
+          success: false,
+          error: err.message || 'An unexpected error occurred while communicating with Supabase.',
+        };
       }
     }
 
-    return tokenData;
+    // 2. Fallback mode if Supabase credentials are not configured in .env
+    const fallbackToken = {
+      ...tokenData,
+      id: tokenData.id || `tok-${Date.now()}`,
+    };
+    setQueue((prev) => [...prev, fallbackToken]);
+    return {
+      success: true,
+      token: fallbackToken,
+    };
   };
 
   /**
@@ -590,13 +669,21 @@ export function QueueProvider({ children }) {
 
     if (isSupabaseConfigured && supabase) {
       try {
+        let resolvedBarberId = null;
+        if (newWalkIn.barberId && isValidUuid(newWalkIn.barberId)) {
+          resolvedBarberId = newWalkIn.barberId;
+        } else if (newWalkIn.barberId && newWalkIn.barberId !== 'any') {
+          const matched = barbers.find(b => b.id === newWalkIn.barberId || b.name?.toLowerCase() === newWalkIn.barberName?.toLowerCase());
+          if (matched && isValidUuid(matched.id)) resolvedBarberId = matched.id;
+        }
+
         const { data } = await supabase
           .from('queue_tokens')
           .insert({
             token_number: tokenNumber,
             customer_name: newWalkIn.customerName,
             customer_phone: newWalkIn.phone,
-            barber_id: newWalkIn.barberId,
+            barber_id: resolvedBarberId,
             barber_name: newWalkIn.barberName,
             chair_number: newWalkIn.chair,
             status: 'waiting',
@@ -640,10 +727,18 @@ export function QueueProvider({ children }) {
 
     if (isSupabaseConfigured && supabase) {
       try {
+        let resolvedBarberId = null;
+        if (newBarberId && isValidUuid(newBarberId)) {
+          resolvedBarberId = newBarberId;
+        } else if (newBarberId && newBarberId !== 'any') {
+          const matched = barbers.find(b => b.id === newBarberId || b.name?.toLowerCase() === chosenBarber?.name?.toLowerCase());
+          if (matched && isValidUuid(matched.id)) resolvedBarberId = matched.id;
+        }
+
         await supabase
           .from('queue_tokens')
           .update({
-            barber_id: newBarberId === 'any' ? null : newBarberId,
+            barber_id: resolvedBarberId,
             barber_name: chosenBarber ? chosenBarber.name : 'Any Available Stylist',
             chair_number: chosenBarber ? chosenBarber.chair : null,
           })

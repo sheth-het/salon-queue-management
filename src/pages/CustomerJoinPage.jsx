@@ -16,7 +16,8 @@ import {
   X,
   Info,
   Lock,
-  DoorClosed
+  DoorClosed,
+  RefreshCw
 } from 'lucide-react';
 
 export default function CustomerJoinPage() {
@@ -38,6 +39,7 @@ export default function CustomerJoinPage() {
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [limitNotice, setLimitNotice] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
 
   // Toggle service selection with MAX 3 CONSTRAINT
   const toggleService = (serviceId) => {
@@ -114,20 +116,18 @@ export default function CustomerJoinPage() {
     }
   };
 
-  const handleFinalConfirm = () => {
+  const handleFinalConfirm = async () => {
     if (!isQueueOpen) return;
     setIsSubmitting(true);
+    setSubmitError(null);
 
     const tokenNumber = generateNextTokenNumber();
 
-    const newToken = {
-      id: `tok-${Date.now()}`,
+    const tokenPayload = {
       tokenNumber: tokenNumber,
       customerName: customerName.trim(),
       phone: customerPhone.replace(/\D/g, ''),
-      services: selectedServiceObjects.map((s) =>
-        language === 'gu' ? s.name_gu : s.name_en
-      ),
+      services: selectedServiceObjects,
       totalDuration,
       totalPrice,
       barberId: chosenBarber === 'any' ? null : chosenBarber,
@@ -136,21 +136,35 @@ export default function CustomerJoinPage() {
         : (language === 'gu' ? 'કોઈપણ ઉપલબ્ધ વાળંદ' : 'Any Available Stylist'),
       chair: selectedBarberObject ? selectedBarberObject.chair : 1,
       status: 'waiting',
-      position: 2,
+      position: queue.filter((t) => t.status === 'waiting').length + 1,
       joinedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       estimatedWaitMinutes: estimatedWait,
     };
 
-    localStorage.setItem('salon_active_token', JSON.stringify(newToken));
-    if (joinOnlineQueue) {
-      joinOnlineQueue(newToken);
-    }
+    try {
+      if (joinOnlineQueue) {
+        const res = await joinOnlineQueue(tokenPayload);
 
-    setTimeout(() => {
+        if (res && res.success === false) {
+          setIsSubmitting(false);
+          setSubmitError(res.error || 'Failed to save token to database. Please try again.');
+          return;
+        }
+
+        const savedToken = res?.token || tokenPayload;
+        localStorage.setItem('salon_active_token', JSON.stringify(savedToken));
+      } else {
+        localStorage.setItem('salon_active_token', JSON.stringify(tokenPayload));
+      }
+
       setIsSubmitting(false);
       setShowConfirmation(false);
       navigate('/status');
-    }, 500);
+    } catch (err) {
+      console.error('Error during token submission:', err);
+      setIsSubmitting(false);
+      setSubmitError(err.message || 'An unexpected error occurred while communicating with the database.');
+    }
   };
 
   return (
@@ -599,21 +613,39 @@ export default function CustomerJoinPage() {
               </div>
             </div>
 
+            {submitError && (
+              <div className="p-3.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs flex items-start gap-2 animate-bounce">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                <div>
+                  <span className="font-bold block">Database Registration Failed</span>
+                  <span className="text-[11px] text-rose-200 mt-0.5 block">{submitError}</span>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-2">
               <button
                 type="button"
                 id="final-confirm-token-btn"
                 disabled={isSubmitting}
                 onClick={handleFinalConfirm}
-                className="w-full py-3.5 rounded-xl bg-gold-500 hover:bg-gold-400 text-charcoal-900 font-black text-sm tracking-wide transition shadow-lg shadow-gold-500/20 active:scale-[0.98] disabled:opacity-50"
+                className="w-full py-3.5 rounded-xl bg-gold-500 hover:bg-gold-400 text-charcoal-900 font-black text-sm tracking-wide transition shadow-lg shadow-gold-500/20 active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {isSubmitting ? 'Generating Token (S-...)...' : t('join.btnConfirm')}
+                {isSubmitting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Saving to Supabase...</span>
+                  </>
+                ) : (
+                  <span>{t('join.btnConfirm')}</span>
+                )}
               </button>
 
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setShowConfirmation(false)}
-                className="w-full py-2.5 rounded-xl bg-charcoal-700 hover:bg-charcoal-600 text-gray-300 font-semibold text-xs transition"
+                className="w-full py-2.5 rounded-xl bg-charcoal-700 hover:bg-charcoal-600 text-gray-300 font-semibold text-xs transition disabled:opacity-50"
               >
                 {t('join.btnEdit')}
               </button>
