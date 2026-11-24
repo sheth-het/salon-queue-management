@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useQueue } from '../contexts/QueueContext';
 import { 
   evaluateCustomerState, 
   calculateDynamicWaitTime, 
@@ -28,6 +29,7 @@ import {
 export default function CustomerStatusPage() {
   const { t, language } = useLanguage();
   const navigate = useNavigate();
+  const { queue, cancelToken } = useQueue();
 
   // Active Token state
   const [token, setToken] = useState(null);
@@ -36,21 +38,38 @@ export default function CustomerStatusPage() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
 
-  // Load token from localStorage or initialize with sample S-2 token
+  // Sync token from queue if available, else localStorage
   useEffect(() => {
     const saved = localStorage.getItem('salon_active_token');
+    let localTok = null;
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
-        setToken(parsed);
-        setQueuePosition(parsed.position || 2);
-      } catch (e) {
-        loadDefaultSample();
+        localTok = JSON.parse(saved);
+      } catch (e) {}
+    }
+
+    if (localTok) {
+      // Find latest live token state from shared queue
+      const liveToken = queue.find(
+        (t) => t.id === localTok.id || t.tokenNumber === localTok.tokenNumber
+      );
+      if (liveToken) {
+        setToken(liveToken);
+        // Calculate position among waiting tokens
+        const waitingTokens = queue.filter(
+          (t) => t.status === 'waiting' || t.status === 'called'
+        );
+        const idx = waitingTokens.findIndex((t) => t.id === liveToken.id);
+        const pos = idx >= 0 ? idx + 1 : 1;
+        setQueuePosition(liveToken.status === 'called' ? 1 : pos);
+      } else {
+        setToken(localTok);
+        setQueuePosition(localTok.position || 2);
       }
     } else {
       loadDefaultSample();
     }
-  }, []);
+  }, [queue]);
 
   const loadDefaultSample = () => {
     // S-2 sample token (Second in line)
@@ -97,6 +116,9 @@ export default function CustomerStatusPage() {
 
   // Confirm cancel action
   const handleConfirmCancel = () => {
+    if (token && cancelToken) {
+      cancelToken(token.id);
+    }
     localStorage.removeItem('salon_active_token');
     setShowCancelModal(false);
     navigate('/');

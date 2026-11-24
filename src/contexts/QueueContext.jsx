@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { dummyQueueTokens, dummyBarbers, dummyServices, dummySalonSettings } from '../data/dummyData';
 import { 
   getNextEligibleCustomer, 
@@ -16,6 +17,63 @@ const STORAGE_QUEUE_KEY = 'salon_shared_queue_v2';
 const STORAGE_BARBERS_KEY = 'salon_shared_barbers_v2';
 const STORAGE_SERVICES_KEY = 'salon_shared_services_v2';
 const STORAGE_QUEUE_OPEN_KEY = 'salon_shared_queue_open_v2';
+
+// -----------------------------------------------------------------------------
+// ADAPTER HELPERS: Map between Supabase snake_case & UI camelCase models
+// -----------------------------------------------------------------------------
+function mapDbTokenToUi(dbRow) {
+  if (!dbRow) return null;
+  return {
+    id: dbRow.id,
+    tokenNumber: dbRow.token_number,
+    customerName: dbRow.customer_name,
+    phone: dbRow.customer_phone || '',
+    services: Array.isArray(dbRow.services) 
+      ? dbRow.services.map(s => typeof s === 'string' ? s : s.name || s.name_en || s) 
+      : [],
+    totalDuration: dbRow.total_duration || 30,
+    totalPrice: dbRow.total_price || 200,
+    barberId: dbRow.barber_id,
+    barberName: dbRow.barber_name || 'Any Available Stylist',
+    chair: dbRow.chair_number || 1,
+    status: dbRow.status || 'waiting',
+    source: dbRow.source || 'online',
+    position: dbRow.position || 1,
+    estimatedWaitMinutes: dbRow.estimated_wait_minutes || 15,
+    joinedAt: dbRow.joined_at ? new Date(dbRow.joined_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+    calledAt: dbRow.called_at ? new Date(dbRow.called_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
+    startedAt: dbRow.started_at ? new Date(dbRow.started_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
+    completedAt: dbRow.completed_at ? new Date(dbRow.completed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
+    elapsedMinutes: 0,
+  };
+}
+
+function mapDbBarberToUi(dbRow) {
+  if (!dbRow) return null;
+  return {
+    id: dbRow.id,
+    name: dbRow.name,
+    nameGu: dbRow.name_gu || dbRow.name,
+    chair: dbRow.chair_number,
+    status: dbRow.status || 'active',
+    isActive: dbRow.is_active !== false,
+  };
+}
+
+function mapDbServiceToUi(dbRow) {
+  if (!dbRow) return null;
+  return {
+    id: dbRow.id,
+    name_en: dbRow.name_en,
+    name_gu: dbRow.name_gu,
+    duration: dbRow.duration_minutes || 30,
+    price: dbRow.price || 200,
+    category: dbRow.category || 'Hair',
+    description_en: dbRow.description_en || '',
+    description_gu: dbRow.description_gu || '',
+    isActive: dbRow.is_active !== false,
+  };
+}
 
 export function QueueProvider({ children }) {
   // 1. Shared queue tokens state
@@ -63,12 +121,148 @@ export function QueueProvider({ children }) {
   });
 
   // Salon settings
-  const [salonSettings] = useState(dummySalonSettings);
+  const [salonSettings, setSalonSettings] = useState(dummySalonSettings);
 
   // Tracks newly called token to trigger TV screen ripple/glow and sound chime
   const [lastCalledToken, setLastCalledToken] = useState(null);
 
-  // Persist to localStorage on change so tabs/views stay synced
+  // Supabase real-time connection status
+  const [dbConnected, setDbConnected] = useState(isSupabaseConfigured);
+
+  // =========================================================================
+  // SUPABASE POSTGRESQL & REALTIME SUBSCRIPTION
+  // =========================================================================
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      return;
+    }
+
+    let isMounted = true;
+
+    // 1. Initial Data Fetch from Supabase
+    async function fetchInitialData() {
+      try {
+        // Fetch Salon Settings
+        const { data: settingsData } = await supabase
+          .from('salon_settings')
+          .select('*')
+          .limit(1)
+          .single();
+
+        if (settingsData && isMounted) {
+          setIsQueueOpen(settingsData.is_queue_open);
+          setSalonSettings(prev => ({
+            ...prev,
+            salonName: settingsData.salon_name,
+            isQueueOpen: settingsData.is_queue_open,
+            maxQueueCapacity: settingsData.max_queue_capacity,
+            bufferMinutes: settingsData.buffer_minutes,
+          }));
+        }
+
+        // Fetch Services
+        const { data: servicesData } = await supabase
+          .from('services')
+          .select('*')
+          .order('created_at', { ascending: true });
+
+        if (servicesData && servicesData.length > 0 && isMounted) {
+          setServices(servicesData.map(mapDbServiceToUi));
+        }
+
+        // Fetch Barbers
+        const { data: barbersData } = await supabase
+          .from('barbers')
+          .select('*')
+          .order('chair_number', { ascending: true });
+
+        if (barbersData && barbersData.length > 0 && isMounted) {
+          setBarbers(barbersData.map(mapDbBarberToUi));
+        }
+
+        // Fetch Active Queue Tokens
+        const { data: queueData } = await supabase
+          .from('queue_tokens')
+          .select('*')
+          .order('joined_at', { ascending: true });
+
+        if (queueData && isMounted) {
+          setQueue(queueData.map(mapDbTokenToUi));
+        }
+
+        if (isMounted) setDbConnected(true);
+      } catch (err) {
+        console.warn('Error fetching initial data from Supabase:', err);
+      }
+    }
+
+    fetchInitialData();
+
+    // 2. Realtime Channel Subscription for live cross-window synchronizations
+    const channel = supabase
+      .channel('salon_realtime_channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'queue_tokens' }, (payload) => {
+        if (!isMounted) return;
+
+        if (payload.eventType === 'INSERT') {
+          const newUiToken = mapDbTokenToUi(payload.new);
+          setQueue(prev => {
+            if (prev.some(t => t.id === newUiToken.id)) return prev;
+            return [...prev, newUiToken];
+          });
+        } else if (payload.eventType === 'UPDATE') {
+          const updatedUiToken = mapDbTokenToUi(payload.new);
+          if (updatedUiToken.status === 'called') {
+            setLastCalledToken(updatedUiToken.tokenNumber);
+            playChime();
+          }
+          setQueue(prev => prev.map(t => t.id === updatedUiToken.id ? { ...t, ...updatedUiToken } : t));
+        } else if (payload.eventType === 'DELETE') {
+          setQueue(prev => prev.filter(t => t.id !== payload.old.id));
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'barbers' }, (payload) => {
+        if (!isMounted) return;
+        if (payload.eventType === 'UPDATE') {
+          const updatedBarber = mapDbBarberToUi(payload.new);
+          setBarbers(prev => prev.map(b => b.id === updatedBarber.id ? { ...b, ...updatedBarber } : b));
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'services' }, (payload) => {
+        if (!isMounted) return;
+        if (payload.eventType === 'INSERT') {
+          const newService = mapDbServiceToUi(payload.new);
+          setServices(prev => [...prev, newService]);
+        } else if (payload.eventType === 'UPDATE') {
+          const updatedService = mapDbServiceToUi(payload.new);
+          setServices(prev => prev.map(s => s.id === updatedService.id ? { ...s, ...updatedService } : s));
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'salon_settings' }, (payload) => {
+        if (!isMounted) return;
+        if (payload.new) {
+          setIsQueueOpen(payload.new.is_queue_open);
+          setSalonSettings(prev => ({
+            ...prev,
+            isQueueOpen: payload.new.is_queue_open,
+            maxQueueCapacity: payload.new.max_queue_capacity,
+            bufferMinutes: payload.new.buffer_minutes,
+          }));
+        }
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('⚡ Connected to Supabase Realtime channel');
+        }
+      });
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Persist to localStorage on change so tabs/views stay synced even without remote backend
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_QUEUE_KEY, JSON.stringify(queue));
@@ -93,7 +287,7 @@ export function QueueProvider({ children }) {
     } catch (e) {}
   }, [isQueueOpen]);
 
-  // Sync across different browser tabs/windows automatically
+  // Cross-browser-tab synchronization via storage event
   useEffect(() => {
     const handleStorageChange = (e) => {
       try {
@@ -108,10 +302,66 @@ export function QueueProvider({ children }) {
   }, []);
 
   // =========================================================================
-  // QUEUE & BARBER ACTIONS
+  // QUEUE & BARBER ACTIONS (WITH SUPABASE INTEGRATION)
   // =========================================================================
 
-  const callNextCustomer = (barberId) => {
+  /**
+   * Online Customer Joins Queue
+   * Inserts into Supabase queue_tokens and synchronizes cross-window state
+   */
+  const joinOnlineQueue = async (tokenData) => {
+    // 1. Optimistic local state update
+    setQueue(prev => [...prev, tokenData]);
+
+    // 2. Persist to Supabase if configured
+    if (isSupabaseConfigured && supabase) {
+      try {
+        // Also insert/upsert customer
+        if (tokenData.phone) {
+          await supabase.from('customers').insert({
+            name: tokenData.customerName,
+            phone: tokenData.phone,
+          });
+        }
+
+        const dbRow = {
+          token_number: tokenData.tokenNumber,
+          customer_name: tokenData.customerName,
+          customer_phone: tokenData.phone || null,
+          barber_id: tokenData.barberId || null,
+          barber_name: tokenData.barberName || 'Any Available Stylist',
+          chair_number: tokenData.chair || 1,
+          status: 'waiting',
+          source: 'online',
+          total_duration: tokenData.totalDuration || 30,
+          total_price: tokenData.totalPrice || 200,
+          position: tokenData.position || 2,
+          estimated_wait_minutes: tokenData.estimatedWaitMinutes || 15,
+          services: tokenData.services || [],
+        };
+
+        const { data, error } = await supabase
+          .from('queue_tokens')
+          .insert(dbRow)
+          .select()
+          .single();
+
+        if (!error && data) {
+          // Replace optimistic ID with database UUID
+          setQueue(prev => prev.map(t => t.id === tokenData.id ? { ...t, id: data.id } : t));
+        }
+      } catch (err) {
+        console.warn('Could not insert token to Supabase:', err);
+      }
+    }
+
+    return tokenData;
+  };
+
+  /**
+   * Receptionist Calls Next Eligible Customer
+   */
+  const callNextCustomer = async (barberId) => {
     const barber = barbers.find(b => b.id === barberId);
     if (!barber) return { success: false, reason: 'Barber not found' };
 
@@ -127,7 +377,10 @@ export function QueueProvider({ children }) {
       };
     }
 
-    const updatedQueue = queue.map(item => {
+    const callTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Update local state
+    setQueue(prev => prev.map(item => {
       if (item.id === eligibleCustomer.id) {
         return {
           ...item,
@@ -135,15 +388,32 @@ export function QueueProvider({ children }) {
           barberId: barber.id,
           barberName: barber.name,
           chair: barber.chair,
-          calledAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          calledAt: callTimeStr,
         };
       }
       return item;
-    });
+    }));
 
-    setQueue(updatedQueue);
     setLastCalledToken(eligibleCustomer.tokenNumber);
     playChime();
+
+    // Update Supabase
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('queue_tokens')
+          .update({
+            status: 'called',
+            barber_id: barber.id,
+            barber_name: barber.name,
+            chair_number: barber.chair,
+            called_at: new Date().toISOString(),
+          })
+          .eq('id', eligibleCustomer.id);
+      } catch (err) {
+        console.warn('Could not update called token in Supabase:', err);
+      }
+    }
 
     return { 
       success: true, 
@@ -153,53 +423,149 @@ export function QueueProvider({ children }) {
     };
   };
 
-  const startService = (tokenId) => {
+  /**
+   * Barber Starts Service
+   */
+  const startService = async (tokenId) => {
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     setQueue(prevQueue =>
       prevQueue.map(item =>
-        item.id === tokenId ? { ...item, status: 'in_service', startedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } : item
+        item.id === tokenId ? { ...item, status: 'in_service', startedAt: timeStr } : item
       )
     );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('queue_tokens')
+          .update({
+            status: 'in_service',
+            started_at: new Date().toISOString(),
+          })
+          .eq('id', tokenId);
+      } catch (err) {
+        console.warn('Could not update startService in Supabase:', err);
+      }
+    }
   };
 
-  const completeService = (tokenId) => {
+  /**
+   * Barber Completes Service
+   */
+  const completeService = async (tokenId) => {
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     setQueue(prevQueue =>
       prevQueue.map(item =>
-        item.id === tokenId ? { ...item, status: 'completed', completedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } : item
+        item.id === tokenId ? { ...item, status: 'completed', completedAt: timeStr } : item
       )
     );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('queue_tokens')
+          .update({
+            status: 'completed',
+            completed_at: new Date().toISOString(),
+          })
+          .eq('id', tokenId);
+      } catch (err) {
+        console.warn('Could not update completeService in Supabase:', err);
+      }
+    }
   };
 
-  const setBarberStatus = (barberId, status) => {
+  /**
+   * Set Barber Shift Status
+   */
+  const setBarberStatus = async (barberId, status) => {
     setBarbers(prevBarbers =>
       prevBarbers.map(b => (b.id === barberId ? { ...b, status } : b))
     );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('barbers')
+          .update({ status })
+          .eq('id', barberId);
+      } catch (err) {
+        console.warn('Could not update barber status in Supabase:', err);
+      }
+    }
   };
 
-  const toggleBarberDuty = (barberId) => {
+  /**
+   * Toggle Barber On/Off Duty
+   */
+  const toggleBarberDuty = async (barberId) => {
+    let nextStatus = 'active';
     setBarbers(prevBarbers =>
       prevBarbers.map(b => {
         if (b.id === barberId) {
-          const newStatus = b.status === 'off_duty' ? 'active' : 'off_duty';
-          return { ...b, status: newStatus };
+          nextStatus = b.status === 'off_duty' ? 'active' : 'off_duty';
+          return { ...b, status: nextStatus };
         }
         return b;
       })
     );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('barbers')
+          .update({ status: nextStatus })
+          .eq('id', barberId);
+      } catch (err) {
+        console.warn('Could not toggle barber duty in Supabase:', err);
+      }
+    }
   };
 
-  const markNoShow = (tokenId) => {
+  /**
+   * Mark Customer No-Show
+   */
+  const markNoShow = async (tokenId) => {
     setQueue(prevQueue =>
       prevQueue.map(item => (item.id === tokenId ? { ...item, status: 'no_show' } : item))
     );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('queue_tokens')
+          .update({ status: 'no_show' })
+          .eq('id', tokenId);
+      } catch (err) {
+        console.warn('Could not mark no-show in Supabase:', err);
+      }
+    }
   };
 
-  const cancelToken = (tokenId) => {
+  /**
+   * Cancel Token Spot
+   */
+  const cancelToken = async (tokenId) => {
     setQueue(prevQueue =>
       prevQueue.map(item => (item.id === tokenId ? { ...item, status: 'cancelled' } : item))
     );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('queue_tokens')
+          .update({ status: 'cancelled' })
+          .eq('id', tokenId);
+      } catch (err) {
+        console.warn('Could not cancel token in Supabase:', err);
+      }
+    }
   };
 
-  const addWalkIn = ({ customerName, phone, services, barberId }) => {
+  /**
+   * Front-Desk Walk-In Customer Registration
+   */
+  const addWalkIn = async ({ customerName, phone, services, barberId }) => {
     const tokenNumber = generateWalkInTokenNumber();
     const chosenBarberObj = barbers.find(b => b.id === barberId);
 
@@ -211,8 +577,8 @@ export function QueueProvider({ children }) {
       services: services.map(s => s.name || s),
       totalDuration: services.reduce((sum, s) => sum + (s.duration || 30), 0) || 30,
       totalPrice: services.reduce((sum, s) => sum + (s.price || 200), 0) || 200,
-      barberId: barberId === 'any' ? 'any' : barberId,
-      barberName: chosenBarberObj ? chosenBarberObj.name : 'Any Stylist',
+      barberId: barberId === 'any' ? null : barberId,
+      barberName: chosenBarberObj ? chosenBarberObj.name : 'Any Available Stylist',
       chair: chosenBarberObj ? chosenBarberObj.chair : null,
       status: 'waiting',
       source: 'walk_in',
@@ -221,7 +587,71 @@ export function QueueProvider({ children }) {
     };
 
     setQueue(prevQueue => [...prevQueue, newWalkIn]);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data } = await supabase
+          .from('queue_tokens')
+          .insert({
+            token_number: tokenNumber,
+            customer_name: newWalkIn.customerName,
+            customer_phone: newWalkIn.phone,
+            barber_id: newWalkIn.barberId,
+            barber_name: newWalkIn.barberName,
+            chair_number: newWalkIn.chair,
+            status: 'waiting',
+            source: 'walk_in',
+            total_duration: newWalkIn.totalDuration,
+            total_price: newWalkIn.totalPrice,
+            services: newWalkIn.services,
+          })
+          .select()
+          .single();
+
+        if (data) {
+          setQueue(prev => prev.map(t => t.id === newWalkIn.id ? { ...t, id: data.id } : t));
+        }
+      } catch (err) {
+        console.warn('Could not insert walk-in to Supabase:', err);
+      }
+    }
+
     return newWalkIn;
+  };
+
+  /**
+   * Reassign Customer to Another Barber Chair
+   */
+  const reassignCustomerBarber = async (tokenId, newBarberId) => {
+    const chosenBarber = barbers.find(b => b.id === newBarberId);
+    setQueue(prevQueue =>
+      prevQueue.map(item => {
+        if (item.id === tokenId) {
+          return {
+            ...item,
+            barberId: newBarberId === 'any' ? null : newBarberId,
+            barberName: chosenBarber ? chosenBarber.name : 'Any Available Stylist',
+            chair: chosenBarber ? chosenBarber.chair : null,
+          };
+        }
+        return item;
+      })
+    );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('queue_tokens')
+          .update({
+            barber_id: newBarberId === 'any' ? null : newBarberId,
+            barber_name: chosenBarber ? chosenBarber.name : 'Any Available Stylist',
+            chair_number: chosenBarber ? chosenBarber.chair : null,
+          })
+          .eq('id', tokenId);
+      } catch (err) {
+        console.warn('Could not reassign barber in Supabase:', err);
+      }
+    }
   };
 
   // =========================================================================
@@ -230,31 +660,61 @@ export function QueueProvider({ children }) {
 
   /**
    * Turn a service on or off (Active / Inactive)
-   * Rule: When turned off, it is hidden from the Join Queue screen.
    */
-  const toggleServiceActive = (serviceId) => {
+  const toggleServiceActive = async (serviceId) => {
+    let nextActive = true;
     setServices(prevServices =>
-      prevServices.map(s =>
-        s.id === serviceId ? { ...s, isActive: s.isActive === false ? true : false } : s
-      )
+      prevServices.map(s => {
+        if (s.id === serviceId) {
+          nextActive = s.isActive === false ? true : false;
+          return { ...s, isActive: nextActive };
+        }
+        return s;
+      })
     );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('services')
+          .update({ is_active: nextActive })
+          .eq('id', serviceId);
+      } catch (err) {
+        console.warn('Could not toggle service active in Supabase:', err);
+      }
+    }
   };
 
   /**
    * Update service details (price, duration, names)
    */
-  const updateService = (serviceId, updatedFields) => {
+  const updateService = async (serviceId, updatedFields) => {
     setServices(prevServices =>
-      prevServices.map(s =>
-        s.id === serviceId ? { ...s, ...updatedFields } : s
-      )
+      prevServices.map(s => (s.id === serviceId ? { ...s, ...updatedFields } : s))
     );
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const dbFields = {};
+        if (updatedFields.name_en) dbFields.name_en = updatedFields.name_en;
+        if (updatedFields.name_gu) dbFields.name_gu = updatedFields.name_gu;
+        if (updatedFields.price !== undefined) dbFields.price = updatedFields.price;
+        if (updatedFields.duration !== undefined) dbFields.duration_minutes = updatedFields.duration;
+
+        await supabase
+          .from('services')
+          .update(dbFields)
+          .eq('id', serviceId);
+      } catch (err) {
+        console.warn('Could not update service in Supabase:', err);
+      }
+    }
   };
 
   /**
    * Add a new service to the catalog
    */
-  const addService = (newService) => {
+  const addService = async (newService) => {
     const id = `srv-${Date.now()}`;
     const serviceToAdd = {
       id,
@@ -267,16 +727,52 @@ export function QueueProvider({ children }) {
       description_gu: newService.description_gu || 'સલૂન સેવા',
       isActive: true,
     };
+
     setServices(prev => [...prev, serviceToAdd]);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data } = await supabase
+          .from('services')
+          .insert({
+            name_en: serviceToAdd.name_en,
+            name_gu: serviceToAdd.name_gu,
+            duration_minutes: serviceToAdd.duration,
+            price: serviceToAdd.price,
+            category: serviceToAdd.category,
+            is_active: true,
+          })
+          .select()
+          .single();
+
+        if (data) {
+          setServices(prev => prev.map(s => s.id === serviceToAdd.id ? mapDbServiceToUi(data) : s));
+        }
+      } catch (err) {
+        console.warn('Could not add service to Supabase:', err);
+      }
+    }
+
     return serviceToAdd;
   };
 
   /**
    * Master Queue Open / Close toggle
-   * Rule: When closed, disables online joining while allowing walk-ins.
    */
-  const toggleQueueOpen = () => {
-    setIsQueueOpen(prev => !prev);
+  const toggleQueueOpen = async () => {
+    const nextState = !isQueueOpen;
+    setIsQueueOpen(nextState);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase
+          .from('salon_settings')
+          .update({ is_queue_open: nextState })
+          .neq('id', '00000000-0000-0000-0000-000000000000'); // updates the settings row
+      } catch (err) {
+        console.warn('Could not toggle queue open in Supabase:', err);
+      }
+    }
   };
 
   const resetToDefaults = () => {
@@ -294,15 +790,15 @@ export function QueueProvider({ children }) {
   // QUERY HELPERS & ANALYTICS METRICS
   // =========================================================================
 
-  const getActiveCustomerForBarber = (barberId) => {
+  const getActiveCustomerForBarber = useCallback((barberId) => {
     return getActiveCustomerHelper(barberId, queue);
-  };
+  }, [queue]);
 
-  const getNextCustomerForBarber = (barberId) => {
+  const getNextCustomerForBarber = useCallback((barberId) => {
     return getNextEligibleCustomer(barberId, queue);
-  };
+  }, [queue]);
 
-  const getUpcomingTokens = (limit = 5) => {
+  const getUpcomingTokens = useCallback((limit = 5) => {
     const waitingTokens = queue.filter(item => item.status === 'waiting');
     return waitingTokens.slice(0, limit).map((token, index) => {
       const preceding = waitingTokens.slice(0, index);
@@ -317,15 +813,14 @@ export function QueueProvider({ children }) {
         calculatedWaitMinutes: estWait
       };
     });
-  };
+  }, [queue, barbers, salonSettings.bufferMinutes]);
 
   // Today's Metrics
   const completedCount = queue.filter(t => t.status === 'completed').length;
   const noShowCount = queue.filter(t => t.status === 'no_show').length;
-  // Base day analytics + live actions
   const customersServedToday = 14 + completedCount;
   const noShowsToday = 2 + noShowCount;
-  const avgWaitTimeToday = 22; // Average wait time in minutes
+  const avgWaitTimeToday = 22;
 
   return (
     <QueueContext.Provider
@@ -336,6 +831,8 @@ export function QueueProvider({ children }) {
         isQueueOpen,
         salonSettings,
         lastCalledToken,
+        dbConnected,
+        joinOnlineQueue,
         callNextCustomer,
         startService,
         completeService,
@@ -344,6 +841,7 @@ export function QueueProvider({ children }) {
         markNoShow,
         cancelToken,
         addWalkIn,
+        reassignCustomerBarber,
         toggleServiceActive,
         updateService,
         addService,

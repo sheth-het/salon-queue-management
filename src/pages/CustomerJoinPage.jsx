@@ -22,7 +22,7 @@ import {
 export default function CustomerJoinPage() {
   const { t, language } = useLanguage();
   const navigate = useNavigate();
-  const { services, barbers, isQueueOpen, salonSettings, queue } = useQueue();
+  const { services, barbers, isQueueOpen, salonSettings, queue, joinOnlineQueue } = useQueue();
 
   // Filter only active services (services turned OFF by owner are hidden!)
   const visibleServices = services.filter((s) => s.isActive !== false);
@@ -142,6 +142,9 @@ export default function CustomerJoinPage() {
     };
 
     localStorage.setItem('salon_active_token', JSON.stringify(newToken));
+    if (joinOnlineQueue) {
+      joinOnlineQueue(newToken);
+    }
 
     setTimeout(() => {
       setIsSubmitting(false);

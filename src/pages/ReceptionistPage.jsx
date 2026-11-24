@@ -27,12 +27,14 @@ export default function ReceptionistPage() {
   const { 
     queue, 
     barbers, 
+    services,
     callNextCustomer, 
     startService, 
     completeService, 
     markNoShow, 
     cancelToken, 
-    addWalkIn 
+    addWalkIn,
+    reassignCustomerBarber 
   } = useQueue();
 
   const [activeFilter, setActiveFilter] = useState('waiting');
@@ -76,7 +78,8 @@ export default function ReceptionistPage() {
       return;
     }
 
-    const selectedObjs = dummyServices.filter(s => walkInServices.includes(s.id));
+    const activeServiceList = services || dummyServices;
+    const selectedObjs = activeServiceList.filter(s => walkInServices.includes(s.id));
     const newWalkIn = addWalkIn({
       customerName: walkInName.trim(),
       phone: walkInPhone.replace(/\D/g, ''),
@@ -427,10 +430,36 @@ export default function ReceptionistPage() {
                       </td>
 
                       <td className="py-3.5 px-4">
-                        {item.barberId && item.barberId !== 'any' ? (
+                        {item.status === 'waiting' ? (
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={item.barberId || 'any'}
+                              onChange={(e) => {
+                                const newBarberId = e.target.value;
+                                if (reassignCustomerBarber) {
+                                  reassignCustomerBarber(item.id, newBarberId);
+                                  const targetBarber = barbers.find(b => b.id === newBarberId);
+                                  showFeedback(
+                                    `Reassigned Token #${item.tokenNumber} to ${targetBarber ? targetBarber.name : 'Any Stylist'}!`,
+                                    'info'
+                                  );
+                                }
+                              }}
+                              className="bg-charcoal-900 border border-charcoal-600 rounded-lg px-2 py-1 text-[11px] font-bold text-gold-300 focus:outline-none focus:border-gold-500 cursor-pointer"
+                              title="Reassign customer to another barber chair"
+                            >
+                              <option value="any">Any Available Stylist</option>
+                              {barbers.map(b => (
+                                <option key={b.id} value={b.id}>
+                                  {b.name} (Chair #{b.chair})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : item.barberId && item.barberId !== 'any' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-charcoal-900 border border-gold-500/30 text-gold-300 font-bold text-[11px]">
                             <Scissors className="w-3 h-3 text-gold-400" />
-                            <span>{item.barberName} only</span>
+                            <span>{item.barberName}</span>
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-charcoal-900 border border-charcoal-600 text-gray-300 font-medium text-[11px]">
@@ -581,7 +610,7 @@ export default function ReceptionistPage() {
                   {t('reception.walkInModal.services')}
                 </label>
                 <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
-                  {dummyServices.map(srv => {
+                  {(services && services.length > 0 ? services.filter(s => s.isActive !== false) : dummyServices).map(srv => {
                     const isSel = walkInServices.includes(srv.id);
                     return (
                       <div

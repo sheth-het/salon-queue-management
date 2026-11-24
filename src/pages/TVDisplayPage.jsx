@@ -59,7 +59,7 @@ export default function TVDisplayPage() {
   };
 
   return (
-    <div className="min-h-screen bg-charcoal-900 text-white flex flex-col p-4 sm:p-6 lg:p-8 select-none font-sans">
+    <div className="h-screen max-h-screen overflow-hidden bg-charcoal-900 text-white flex flex-col p-4 sm:p-6 lg:p-8 select-none font-sans">
       {/* TV Header Bar */}
       <div className="flex flex-col sm:flex-row items-center justify-between pb-4 border-b border-charcoal-700/80 mb-6 gap-4">
         {/* Salon Branding */}
